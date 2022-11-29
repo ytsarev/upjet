@@ -2,9 +2,9 @@
 
 This document describes the steps that need to be applied to migrate from
 community providers to official providers manually. We plan to implement a
-client-based tool to automate this process. 
+client-based tool to automate this process.
 
-For the sake of simplicity, we only focus on migrating managed resources 
+For the sake of simplicity, we only focus on migrating managed resources
 and compositions in this guide. These scenarios can be extended
 with other tools like ArgoCD, Flux, Helm, Kustomize, etc.
 
@@ -133,7 +133,7 @@ kubectl get managed -o yaml > backup-mrs.yaml
 ```
 2) Scale down Crossplane deployment
 ```bash
-kubectl scale deploy crossplane --replicas=0
+kubectl -n upbound-system scale deploy crossplane --replicas=0
 ```
 3) Update deletion policy to `Orphan` with the command below:
 ```bash
@@ -143,8 +143,12 @@ kubectl patch $(kubectl get managed -o name) -p '{"spec": {"deletionPolicy":"Orp
 [Upbound Marketplace] for comparing CRD schema changes. It is also planned to extend current documentation with external-name syntax in this [issue].
 5) Update `crossplane.yaml` file with official provider dependency.
 6) Build and push the new configuration version
-7) Install Official Provider
-8) Install provider config
+7) Install Official Provider # it will not work with scaled down Crossplane
+8) Install provider config.
+Note: In case of provider-terraform, double check the
+backend configuration to match old ProviderConfig. If you are using `kubernetes`
+backend, the `secret_suffix` and `namepspace` should be identical between old
+and new ProviderConfigs
 9) Update managed resource manifests with the same changes done on composition files
 ```bash
 cp backup-mrs.yaml op-mrs.yaml
@@ -158,6 +162,26 @@ kubectl scale deploy ${deployment_name} --replicas=0
 ```bash
 kubectl apply -f op-mrs.yaml
 ```
+If MR was using connection secret you will hit error similar to
+```
+  Warning  CannotPublishConnectionDetails  2s (x3 over 18s)  managed/workspace.tf.upbound.io  cannot create or update connection secret: existing secret is not controlled by UID "e8965abe-a43b-4fed-96e2-33f259644102"
+```
+
+In this case you can remove `ownerReferences` of conflicting secret,e.g.
+
+```
+kubectl edit -n crossplane-system secret 5e840aa4-e736-49a8-9a43-86fada8f3862-secret
+```
+
+Remove
+```
+  ownerReferences:
+  - apiVersion: tf.crossplane.io/v1alpha1
+    controller: true
+    kind: Workspace
+    name: iam-role-demo-001-tqkm2-68fff
+```
+
 12) Delete old MRs
 ```bash
 kubectl delete -f backup-mrs.yaml
@@ -176,11 +200,13 @@ EOF
 ```
 14) Scale up Crossplane deployment
 ```bash
-kubectl scale deploy crossplane --replicas=1
+kubectl scale -n upbound-system deploy crossplane --replicas=1
 ```
+
+**NOTE**: patching XR with old Workspace reference name was required here
 15) Delete old provider config
 ```bash
-kubectl delete providerconfigs ${provider_config_name}
+kubectl delete providerconfigs.${old_api_group} ${provider_config_name}
 ```
 16) Delete old provider
 ```bash
@@ -189,7 +215,7 @@ kubectl delete providers ${provider_name}
 
 #### Migrating VPC in a Composition
 
-In the below, there is a small code snippet from platform-ref-aws to update VPC resource.  
+In the below, there is a small code snippet from platform-ref-aws to update VPC resource.
 
 ```diff
    resources:
